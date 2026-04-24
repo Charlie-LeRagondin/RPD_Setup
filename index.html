@@ -187,10 +187,29 @@
       cursor: pointer;
       transition: all .2s;
       width: 100%;
-      margin-top: 2px;
+      margin-top: 10px;
     }
     #btn-add-tp:hover { border-color: var(--blue); background: rgba(59,130,246,.08); }
-    #tp3-field { display: none; }
+
+    /* ── TP supprimable ─────────────────────────────────────────── */
+    .tp-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 6px;
+    }
+    .tp-header .field-label { margin-bottom: 0; }
+    .tp-del {
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-size: 15px;
+      color: var(--hint);
+      padding: 2px 4px;
+      transition: color .2s;
+      line-height: 1;
+    }
+    .tp-del:hover { color: var(--red); }
 
     /* ── Photo upload ─────────────────────────────────────────── */
     .photo-label {
@@ -347,7 +366,7 @@
         </label>
       </div>
 
-      <!-- PEH / PEB -->
+      <!-- PEH / PEB (visible si market=OFF) -->
       <div class="row" id="wrap-prix">
         <div class="field" id="wrap-peh">
           <label class="field-label" for="peh">Prix Haut (PEH) <span>*</span></label>
@@ -358,6 +377,13 @@
           <label class="field-label" for="peb">Prix Bas (PEB) <span class="opt">(optionnel)</span></label>
           <input type="number" id="peb" placeholder="0.00000" step="any" />
         </div>
+      </div>
+
+      <!-- Prix d'entrée manuel (visible si market=ON) -->
+      <div class="field" id="wrap-prix-entree" style="display:none">
+        <label class="field-label" for="prix-entree">Prix d'entrée <span>*</span></label>
+        <input type="number" id="prix-entree" placeholder="0.00000" step="any" />
+        <div class="err-msg">Obligatoire si entrée MARKET.</div>
       </div>
     </div>
 
@@ -383,32 +409,22 @@
     <div class="card">
       <div class="card-label">Objectifs 🎯</div>
       <div class="tp-section">
-        <div class="tp-row">
-          <div class="field" id="wrap-tp1">
-            <label class="field-label" for="tp1">TP1 <span>*</span></label>
-            <input type="number" id="tp1" placeholder="0.00000" step="any" />
+        <div id="tp-container">
+          <!-- TP1 — requis, pas de suppression -->
+          <div class="field tp-field" id="wrap-tp1">
+            <label class="field-label">TP1 <span>*</span></label>
+            <input type="number" class="tp-input" placeholder="0.00000" step="any" />
             <div class="err-msg">Obligatoire.</div>
           </div>
-          <div class="field">
-            <label class="field-label" for="tp2">TP2 <span class="opt">(optionnel)</span></label>
-            <input type="number" id="tp2" placeholder="0.00000" step="any" />
+          <!-- TP2 — optionnel, supprimable -->
+          <div class="field tp-field" style="margin-top:10px">
+            <div class="tp-header">
+              <label class="field-label">TP2 <span class="opt">(optionnel)</span></label>
+              <button type="button" class="tp-del" onclick="removeTp(this)" title="Supprimer">🗑</button>
+            </div>
+            <input type="number" class="tp-input" placeholder="0.00000" step="any" />
           </div>
         </div>
-
-        <!-- TP3/4/5 cachés par défaut -->
-        <div class="field" id="tp3-field" style="display:none">
-          <label class="field-label" for="tp3">TP3 <span class="opt">(optionnel)</span></label>
-          <input type="number" id="tp3" placeholder="0.00000" step="any" />
-        </div>
-        <div class="field" id="tp4-field" style="display:none">
-          <label class="field-label" for="tp4">TP4 <span class="opt">(optionnel)</span></label>
-          <input type="number" id="tp4" placeholder="0.00000" step="any" />
-        </div>
-        <div class="field" id="tp5-field" style="display:none">
-          <label class="field-label" for="tp5">TP5 <span class="opt">(optionnel)</span></label>
-          <input type="number" id="tp5" placeholder="0.00000" step="any" />
-        </div>
-
         <button type="button" id="btn-add-tp">+ AJOUTER TP</button>
       </div>
     </div>
@@ -475,30 +491,58 @@
       });
     });
 
-    // ── TP3/4/5 toggle ────────────────────────────────────────────
-    const tpFields = ['tp3','tp4','tp5'];
-    let tpNext = 0;
-    const btnAddTp = document.getElementById('btn-add-tp');
-    btnAddTp.addEventListener('click', () => {
-      if (tpNext < tpFields.length) {
-        document.getElementById(tpFields[tpNext] + '-field').style.display = 'flex';
-        tpNext++;
-      }
-      if (tpNext >= tpFields.length) btnAddTp.style.display = 'none';
-    });
+    // ── TP dynamiques illimités ───────────────────────────────────
+    function addTp() {
+      const container = document.getElementById('tp-container');
+      const n = container.querySelectorAll('.tp-field').length + 1;
+      const div = document.createElement('div');
+      div.className = 'field tp-field';
+      div.style.marginTop = '10px';
+      div.innerHTML = `
+        <div class="tp-header">
+          <label class="field-label">TP${n} <span class="opt">(optionnel)</span></label>
+          <button type="button" class="tp-del" onclick="removeTp(this)" title="Supprimer">🗑</button>
+        </div>
+        <input type="number" class="tp-input" placeholder="0.00000" step="any" />
+      `;
+      container.appendChild(div);
+    }
 
-    // ── Market toggle → disable PEH ────────────────────────────────
-    const marketToggle = document.getElementById('market-toggle');
-    const pehInput     = document.getElementById('peh');
-    const pebInput     = document.getElementById('peb');
+    function removeTp(btn) {
+      btn.closest('.tp-field').remove();
+      renumberTps();
+    }
+
+    function renumberTps() {
+      document.querySelectorAll('#tp-container .tp-field').forEach((f, i) => {
+        const n = i + 1;
+        const label = f.querySelector('.field-label');
+        label.innerHTML = n === 1
+          ? `TP1 <span>*</span>`
+          : `TP${n} <span class="opt">(optionnel)</span>`;
+      });
+    }
+
+    document.getElementById('btn-add-tp').addEventListener('click', addTp);
+
+    // ── Market toggle → show/hide PEH/PEB ou prix d'entrée manuel ──
+    const marketToggle    = document.getElementById('market-toggle');
+    const pehInput        = document.getElementById('peh');
+    const pebInput        = document.getElementById('peb');
+    const wrapPrix        = document.getElementById('wrap-prix');
+    const wrapPrixEntree  = document.getElementById('wrap-prix-entree');
+    const prixEntreeInput = document.getElementById('prix-entree');
     marketToggle.addEventListener('change', () => {
       const market = marketToggle.checked;
-      pehInput.disabled = market;
-      pebInput.disabled = market;
+      wrapPrix.style.display       = market ? 'none' : 'grid';
+      wrapPrixEntree.style.display = market ? 'flex'  : 'none';
       if (market) {
         pehInput.value = '';
         pebInput.value = '';
         document.getElementById('wrap-peh').classList.remove('has-error');
+      } else {
+        prixEntreeInput.value = '';
+        wrapPrixEntree.classList.remove('has-error');
       }
     });
 
@@ -565,17 +609,21 @@
       styleWrap.classList.toggle('has-error', !document.getElementById('style').value);
       if (!document.getElementById('style').value) ok = false;
 
-      // PEH (seulement si market=off)
+      // PEH (seulement si market=off) ou prix entrée manuel (si market=on)
       if (!marketToggle.checked) {
         const pehWrap = document.getElementById('wrap-peh');
         pehWrap.classList.toggle('has-error', !pehInput.value);
         if (!pehInput.value) ok = false;
+      } else {
+        wrapPrixEntree.classList.toggle('has-error', !prixEntreeInput.value);
+        if (!prixEntreeInput.value) ok = false;
       }
 
-      // TP1
-      const tp1Wrap = document.getElementById('wrap-tp1');
-      tp1Wrap.classList.toggle('has-error', !document.getElementById('tp1').value);
-      if (!document.getElementById('tp1').value) ok = false;
+      // TP1 (premier champ de la liste)
+      const tp1Input = document.querySelector('#tp-container .tp-input');
+      const tp1Wrap  = document.getElementById('wrap-tp1');
+      tp1Wrap.classList.toggle('has-error', !tp1Input?.value);
+      if (!tp1Input?.value) ok = false;
 
       // SL
       const slWrap = document.getElementById('wrap-sl');
@@ -619,18 +667,17 @@
         direction,
         actif:         document.getElementById('actif').value.trim().toUpperCase(),
         style:         document.getElementById('style').value,
-        entree_market: marketToggle.checked,
-        peh:           pehInput.value   || null,
-        peb:           pebInput.value   || null,
+        entree_market:      marketToggle.checked,
+        prix_entree_manuel: marketToggle.checked ? (prixEntreeInput.value || null) : null,
+        peh:                pehInput.value   || null,
+        peb:                pebInput.value   || null,
         breakeven:     beSelect.value,
         be_prix:       document.getElementById('be-prix').value || null,
-        tp1:           document.getElementById('tp1').value,
-        tp2:           document.getElementById('tp2').value || null,
-        tp3:           document.getElementById('tp3').value || null,
-        tp4:           document.getElementById('tp4').value || null,
-        tp5:           document.getElementById('tp5').value || null,
+        tps:           Array.from(document.querySelectorAll('#tp-container .tp-input'))
+                         .map(i => i.value).filter(v => v),
         sl:            document.getElementById('sl').value,
         comment:       document.getElementById('comment').value.trim() || null,
+        username:      tg?.initDataUnsafe?.user?.username || null,
         photo_b64,
       };
 
@@ -651,6 +698,12 @@
           previewImg.src = '';
           previewBox.style.display = 'none';
           photoDrop.style.display  = 'flex';
+          // Reset TPs : garder uniquement TP1 et TP2, vider leurs valeurs
+          const tpContainer = document.getElementById('tp-container');
+          tpContainer.querySelectorAll('.tp-field').forEach((f, i) => {
+            if (i >= 2) f.remove();
+            else f.querySelector('.tp-input').value = '';
+          });
         } else {
           showToast('❌ Erreur Telegram : ' + JSON.stringify(result.tg?.description || result.error));
         }
@@ -663,11 +716,14 @@
     });
 
     // ── Clear error on input ───────────────────────────────────────
-    ['actif','style','peh','tp1','sl'].forEach(id => {
-      const el = document.getElementById(id);
-      el?.addEventListener('input', () => {
-        el.closest('.field')?.classList.remove('has-error');
+    ['actif','style','peh','sl'].forEach(id => {
+      document.getElementById(id)?.addEventListener('input', e => {
+        e.target.closest('.field')?.classList.remove('has-error');
       });
+    });
+    document.getElementById('tp-container').addEventListener('input', e => {
+      if (e.target.classList.contains('tp-input'))
+        document.getElementById('wrap-tp1').classList.remove('has-error');
     });
   </script>
 

@@ -1,62 +1,141 @@
 from http.server import BaseHTTPRequestHandler
 import json
 import os
+import re
 import base64
+from datetime import datetime
 import requests as req
 
-BOT_TOKEN  = os.environ.get('BOT_TOKEN')
-CHANNEL_ID = os.environ.get('CHANNEL_ID')
+try:
+    from zoneinfo import ZoneInfo
+    _PARIS = ZoneInfo('Europe/Paris')
+except Exception:
+    _PARIS = None
 
-def format_message(d):
-    dir_emoji = "▲" if d['direction'] == 'LONG' else "▼"
-    dir_badge = "🟢" if d['direction'] == 'LONG' else "🔴"
-    style_map = {'SCALP': 'SCALP 🚀', 'INTRA': 'INTRA ⚡', 'SWING': 'SWING 🌊'}
+BOT_TOKEN    = os.environ.get('BOT_TOKEN')
+CHANNEL_ID   = os.environ.get('CHANNEL_ID')
+COUNTER_FILE = '/tmp/counter.txt'
+
+# ── Compteur setup ────────────────────────────────────────────────────────────
+
+def _last_from_telegram():
+    """Cherche #SETUP_N dans les derniers posts du canal via getUpdates."""
+    try:
+        r = req.get(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates",
+            params={'allowed_updates': '["channel_post"]', 'limit': 100, 'offset': -100},
+            timeout=5,
+        )
+        pattern = re.compile(r'#SETUP_(\d+)')
+        for upd in reversed(r.json().get('result', [])):
+            post = upd.get('channel_post') or {}
+            text = post.get('text', '') or post.get('caption', '')
+            m = pattern.search(text)
+            if m:
+                return int(m.group(1))
+    except Exception:
+        pass
+    return None
+
+def get_next_number():
+    last = None
+    try:
+        with open(COUNTER_FILE) as f:
+            last = int(f.read().strip())
+    except Exception:
+        last = _last_from_telegram()
+
+    next_n = (last or 0) + 1
+    try:
+        with open(COUNTER_FILE, 'w') as f:
+            f.write(str(next_n))
+    except Exception:
+        pass
+    return next_n
+
+# ── Calcul du R ───────────────────────────────────────────────────────────────
+
+def _entry_price(d):
+    if d.get('entree_market'):
+        p = d.get('prix_entree_manuel')
+        return float(p) if p else None
+    peh, peb = d.get('peh'), d.get('peb')
+    if peh and peb:
+        try:
+            return (float(peh) + float(peb)) / 2
+        except Exception:
+            pass
+    return float(peh) if peh else None
+
+def _calc_r(tp_val, entry, sl, direction):
+    try:
+        tp    = float(tp_val)
+        one_r = abs(entry - float(sl))
+        if one_r == 0:
+            return ''
+        r = (tp - entry) / one_r if direction == 'LONG' else (entry - tp) / one_r
+        if r <= 0:
+            return ' (R invalide)'
+        return f' (+{r:.1f}R)'
+    except Exception:
+        return ''
+
+# ── Formateur de message ──────────────────────────────────────────────────────
+
+def format_message(d, setup_num):
+    style_labels = {'SCALP': 'SCALP 🚀', 'INTRA': 'INTRA ⚡', 'SWING': 'SWING 🌊'}
+    dir_badge    = '🟢' if d['direction'] == 'LONG' else '🔴'
+
+    now = datetime.now(_PARIS) if _PARIS else datetime.utcnow()
+    date_str = now.strftime('%d/%m à %H:%M')
+
+    username = d.get('username') or 'inconnu'
+    if username not in ('inconnu',) and not username.startswith('@'):
+        username = f'@{username}'
 
     lines = [
-        f"📊 <b>NOUVEAU SETUP — {d['actif']}</b>",
-        f"{dir_badge} <b>{dir_emoji} {d['direction']}</b>  |  {style_map.get(d['style'], d['style'])}",
+        f"🛠 #SETUP_{setup_num} | {style_labels.get(d['style'], d['style'])}",
+        f"🧑‍💼 {username} | 📅 {date_str}",
+        f"{dir_badge} ${d['actif']} {dir_badge} ({d['direction']})",
         "",
     ]
 
-    # Entry
+    # Entrée
     if d.get('entree_market'):
-        lines.append("💰 <b>Entrée :</b> MARKET")
+        lines.append(f"➡️ Entrée : MARKET à {d.get('prix_entree_manuel', '')}")
     else:
-        entry = f"💰 <b>Zone d'entrée</b>\n   PEH : <code>{d['peh']}</code>"
+        lines.append(f"➡️ PEH : {d['peh']}")
         if d.get('peb'):
-            entry += f"\n   PEB : <code>{d['peb']}</code>"
-        lines.append(entry)
+            lines.append(f"➡️ PEB : {d['peb']}")
     lines.append("")
 
-    # TPs
-    tp_lines = ["🎯 <b>Objectifs</b>"]
-    for i in range(1, 6):
-        val = d.get(f'tp{i}')
-        if val:
-            tp_lines.append(f"   TP{i} : <code>{val}</code>")
-    lines += tp_lines
+    # TPs avec R
+    entry = _entry_price(d)
+    for i, tp_val in enumerate(d.get('tps', []), 1):
+        r_str = _calc_r(tp_val, entry, d['sl'], d['direction']) if entry is not None else ''
+        lines.append(f"🎯 TP{i} : {tp_val}{r_str}")
     lines.append("")
 
-    # SL
-    lines.append(f"❌ <b>Stop Loss</b>\n   SL : <code>{d['sl']}</code>")
-    lines.append("")
+    # SL + BE
+    lines.append(f"❌ SL : {d['sl']}")
 
-    # Breakeven
-    be_labels = {
-        'MANUEL':           'Manuel',
-        'AUTO_TP1':         'Auto à TP1 🎯',
-        'AUTO_TP2':         'Auto à TP2 🎯',
-        'PRIX_SPECIFIQUE':  f"Prix spécifique : {d.get('be_prix', '')}",
+    be_map = {
+        'MANUEL':          'Manuel',
+        'AUTO_TP1':        'TP1',
+        'AUTO_TP2':        'TP2',
+        'PRIX_SPECIFIQUE': str(d.get('be_prix', '')),
     }
-    lines.append(f"⚙️ <b>Breakeven :</b> {be_labels.get(d.get('breakeven','MANUEL'), 'Manuel')}")
+    lines.append(f"🛡 BE : {be_map.get(d.get('breakeven', 'MANUEL'), 'Manuel')}")
 
-    # Comment
+    # Commentaire
     if d.get('comment'):
         lines.append("")
-        lines.append(f"📝 <i>{d['comment']}</i>")
+        lines.append(f"📝 {d['comment']}")
 
     return "\n".join(lines)
 
+
+# ── Handler HTTP ──────────────────────────────────────────────────────────────
 
 class handler(BaseHTTPRequestHandler):
 
@@ -72,11 +151,12 @@ class handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         try:
-            length = int(self.headers.get('Content-Length', 0))
-            data   = json.loads(self.rfile.read(length))
+            length  = int(self.headers.get('Content-Length', 0))
+            data    = json.loads(self.rfile.read(length))
 
-            caption = format_message(data)
-            tg      = f"https://api.telegram.org/bot{BOT_TOKEN}"
+            setup_num = get_next_number()
+            caption   = format_message(data, setup_num)
+            tg        = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
             if data.get('photo_b64'):
                 photo_bytes = base64.b64decode(data['photo_b64'])
