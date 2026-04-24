@@ -1,0 +1,649 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+  <title>Setup Trading</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    /* ── Reset & Base ─────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        var(--tg-theme-bg-color,        #0f0f13);
+      --bg2:       var(--tg-theme-secondary-bg-color, #1a1a22);
+      --text:      var(--tg-theme-text-color,       #e8e8f0);
+      --hint:      var(--tg-theme-hint-color,       #6b6b80);
+      --green:     #00c076;
+      --red:       #ff4d6a;
+      --blue:      #3b82f6;
+      --yellow:    #f5c400;
+      --border:    #2a2a38;
+      --radius:    12px;
+      --gap:       14px;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 15px;
+      min-height: 100vh;
+      padding: 16px 16px 32px;
+    }
+
+    /* ── Header ──────────────────────────────────────────────── */
+    .header {
+      text-align: center;
+      margin-bottom: 20px;
+    }
+    .header h1 {
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: var(--yellow);
+    }
+    .header p {
+      font-size: 12px;
+      color: var(--hint);
+      margin-top: 4px;
+    }
+
+    /* ── Section card ────────────────────────────────────────── */
+    .card {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+      margin-bottom: var(--gap);
+    }
+    .card-label {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 1.2px;
+      text-transform: uppercase;
+      color: var(--hint);
+      margin-bottom: 10px;
+    }
+
+    /* ── Direction toggle (LONG / SHORT) ─────────────────────── */
+    .dir-group {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+    .dir-btn {
+      padding: 14px;
+      border: 2px solid var(--border);
+      border-radius: var(--radius);
+      background: transparent;
+      color: var(--hint);
+      font-size: 16px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      cursor: pointer;
+      transition: all .2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+    .dir-btn.long.active  { border-color: var(--green); color: var(--green); background: rgba(0,192,118,.12); box-shadow: 0 0 12px 2px rgba(0,192,118,.45); }
+    .dir-btn.short.active { border-color: var(--red);   color: var(--red);   background: rgba(255,77,106,.12); box-shadow: 0 0 12px 2px rgba(255,77,106,.45); }
+    .dir-btn:not(.active):hover { border-color: #444; color: var(--text); }
+
+    /* ── Generic input / select / textarea ───────────────────── */
+    input[type="text"],
+    input[type="number"],
+    select,
+    textarea {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-size: 15px;
+      padding: 12px 14px;
+      outline: none;
+      transition: border-color .2s;
+      -webkit-appearance: none;
+    }
+    input[type="text"]::placeholder,
+    input[type="number"]::placeholder,
+    textarea::placeholder { color: var(--hint); }
+    input:focus, select:focus, textarea:focus { border-color: var(--blue); }
+
+    select {
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='%236b6b80'%3E%3Cpath d='M7 10l5 5 5-5z'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 12px center;
+      padding-right: 36px;
+      cursor: pointer;
+    }
+    select option { background: #1a1a22; }
+
+    textarea { resize: none; height: 90px; line-height: 1.5; }
+
+    /* ── Row (two fields side by side) ───────────────────────── */
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+    /* ── Field wrapper ───────────────────────────────────────── */
+    .field { display: flex; flex-direction: column; gap: 6px; }
+    .field-label {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: .8px;
+      text-transform: uppercase;
+      color: var(--hint);
+    }
+    .field-label span { color: var(--red); margin-left: 2px; }   /* required star */
+    .field-label .opt { color: #444; font-weight: 400; font-size: 10px; text-transform: none; }
+
+    /* ── Market toggle ───────────────────────────────────────── */
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .toggle-row .desc { flex: 1; }
+    .toggle-row .desc strong { display: block; font-size: 14px; font-weight: 600; }
+    .toggle-row .desc small  { font-size: 12px; color: var(--hint); }
+
+    .switch { position: relative; width: 50px; height: 28px; flex-shrink: 0; }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .slider {
+      position: absolute; inset: 0;
+      background: var(--border);
+      border-radius: 28px;
+      cursor: pointer;
+      transition: background .2s;
+    }
+    .slider::before {
+      content: '';
+      position: absolute;
+      left: 3px; top: 3px;
+      width: 22px; height: 22px;
+      border-radius: 50%;
+      background: #fff;
+      transition: transform .2s;
+    }
+    .switch input:checked + .slider { background: var(--blue); }
+    .switch input:checked + .slider::before { transform: translateX(22px); }
+
+    /* ── TP section ───────────────────────────────────────────── */
+    .tp-section { display: flex; flex-direction: column; gap: 10px; }
+    .tp-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+    #btn-add-tp {
+      background: transparent;
+      border: 1px dashed var(--border);
+      border-radius: 8px;
+      color: var(--blue);
+      font-size: 13px;
+      font-weight: 600;
+      padding: 10px;
+      cursor: pointer;
+      transition: all .2s;
+      width: 100%;
+      margin-top: 2px;
+    }
+    #btn-add-tp:hover { border-color: var(--blue); background: rgba(59,130,246,.08); }
+    #tp3-field { display: none; }
+
+    /* ── Photo upload ─────────────────────────────────────────── */
+    .photo-label {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      border: 2px dashed var(--border);
+      border-radius: var(--radius);
+      padding: 24px 16px;
+      cursor: pointer;
+      transition: all .2s;
+      text-align: center;
+      position: relative;
+    }
+    .photo-label:hover { border-color: var(--blue); }
+    .photo-label .icon { font-size: 32px; }
+    .photo-label .txt { font-size: 13px; color: var(--hint); }
+    .photo-label .req { font-size: 11px; color: var(--red); }
+    #photo-input { display: none; }
+
+    #photo-preview {
+      display: none;
+      position: relative;
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    #photo-preview img {
+      width: 100%;
+      max-height: 200px;
+      object-fit: cover;
+      border-radius: var(--radius);
+    }
+    #photo-preview .remove-btn {
+      position: absolute;
+      top: 8px; right: 8px;
+      background: rgba(0,0,0,.6);
+      border: none;
+      border-radius: 50%;
+      width: 28px; height: 28px;
+      color: #fff;
+      font-size: 14px;
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+    }
+
+    /* ── Error messages ──────────────────────────────────────── */
+    .err-msg {
+      font-size: 11px;
+      color: var(--red);
+      display: none;
+      margin-top: 4px;
+    }
+    .has-error input,
+    .has-error select,
+    .has-error textarea { border-color: var(--red) !important; }
+    .has-error .err-msg  { display: block; }
+    .has-error .photo-label { border-color: var(--red); }
+
+    /* ── Submit button ───────────────────────────────────────── */
+    #btn-submit {
+      width: 100%;
+      padding: 16px;
+      border: none;
+      border-radius: var(--radius);
+      background: var(--yellow);
+      color: #111;
+      font-size: 16px;
+      font-weight: 800;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: opacity .2s, transform .1s;
+      margin-top: 6px;
+    }
+    #btn-submit:hover  { opacity: .9; }
+    #btn-submit:active { transform: scale(.98); }
+
+    /* ── Toast ───────────────────────────────────────────────── */
+    #toast {
+      position: fixed;
+      bottom: 24px; left: 50%; transform: translateX(-50%) translateY(80px);
+      background: #222230;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 20px;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+      box-shadow: 0 4px 24px rgba(0,0,0,.5);
+      transition: transform .3s ease;
+      white-space: nowrap;
+      z-index: 999;
+    }
+    #toast.show { transform: translateX(-50%) translateY(0); }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <h1>📊 Publier un Setup</h1>
+    <p>Remplis le formulaire et valide pour partager dans le canal.</p>
+  </div>
+
+  <form id="setup-form" novalidate>
+
+    <!-- ── 1. Direction LONG / SHORT ── -->
+    <div class="card" id="card-dir">
+      <div class="card-label">Direction <span style="color:var(--red)">*</span></div>
+      <div class="dir-group">
+        <button type="button" class="dir-btn long"  data-dir="LONG">▲ LONG</button>
+        <button type="button" class="dir-btn short" data-dir="SHORT">▼ SHORT</button>
+      </div>
+      <div class="err-msg" id="err-dir">Sélectionne une direction.</div>
+    </div>
+
+    <!-- ── 2. Actif ── -->
+    <div class="card">
+      <div class="field" id="wrap-actif">
+        <label class="field-label" for="actif">Actif <span>*</span></label>
+        <input type="text" id="actif" placeholder="Ex : BTC, EURUSD, XAUUSD" autocomplete="off" />
+        <div class="err-msg">Ce champ est obligatoire.</div>
+      </div>
+    </div>
+
+    <!-- ── 3. Style ── -->
+    <div class="card">
+      <div class="field" id="wrap-style">
+        <label class="field-label" for="style">Style <span>*</span></label>
+        <select id="style">
+          <option value="">-- Choisir un style --</option>
+          <option value="SCALP">SCALP 🚀</option>
+          <option value="INTRA">INTRA ⚡</option>
+          <option value="SWING">SWING 🌊</option>
+        </select>
+        <div class="err-msg">Sélectionne un style de trade.</div>
+      </div>
+    </div>
+
+    <!-- ── 4. Entrée Market + Zone de prix ── -->
+    <div class="card">
+      <div class="card-label">Zone d'entrée</div>
+
+      <!-- Toggle Market -->
+      <div class="toggle-row" style="margin-bottom:16px">
+        <div class="desc">
+          <strong>Entrée MARKET</strong>
+          <small>Si activé, l'entrée est au prix actuel du marché.</small>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="market-toggle" />
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <!-- PEH / PEB -->
+      <div class="row" id="wrap-prix">
+        <div class="field" id="wrap-peh">
+          <label class="field-label" for="peh">Prix Haut (PEH) <span>*</span></label>
+          <input type="number" id="peh" placeholder="0.00000" step="any" />
+          <div class="err-msg">Obligatoire.</div>
+        </div>
+        <div class="field">
+          <label class="field-label" for="peb">Prix Bas (PEB) <span class="opt">(optionnel)</span></label>
+          <input type="number" id="peb" placeholder="0.00000" step="any" />
+        </div>
+      </div>
+    </div>
+
+    <!-- ── 5. Breakeven ── -->
+    <div class="card">
+      <div class="field">
+        <label class="field-label" for="breakeven">Breakeven (AUTO)</label>
+        <select id="breakeven">
+          <option value="MANUEL">MANUEL</option>
+          <option value="AUTO_TP1">AUTO À TP1 🎯</option>
+          <option value="AUTO_TP2">AUTO À TP2 🎯</option>
+          <option value="PRIX_SPECIFIQUE">PRIX SPÉCIFIQUE</option>
+        </select>
+      </div>
+      <!-- Champ prix BE conditionnel -->
+      <div class="field" id="wrap-be-prix" style="margin-top:10px;display:none">
+        <label class="field-label" for="be-prix">Prix du Breakeven</label>
+        <input type="number" id="be-prix" placeholder="0.00000" step="any" />
+      </div>
+    </div>
+
+    <!-- ── 6. Objectifs ── -->
+    <div class="card">
+      <div class="card-label">Objectifs 🎯</div>
+      <div class="tp-section">
+        <div class="tp-row">
+          <div class="field" id="wrap-tp1">
+            <label class="field-label" for="tp1">TP1 <span>*</span></label>
+            <input type="number" id="tp1" placeholder="0.00000" step="any" />
+            <div class="err-msg">Obligatoire.</div>
+          </div>
+          <div class="field">
+            <label class="field-label" for="tp2">TP2 <span class="opt">(optionnel)</span></label>
+            <input type="number" id="tp2" placeholder="0.00000" step="any" />
+          </div>
+        </div>
+
+        <!-- TP3/4/5 cachés par défaut -->
+        <div class="field" id="tp3-field" style="display:none">
+          <label class="field-label" for="tp3">TP3 <span class="opt">(optionnel)</span></label>
+          <input type="number" id="tp3" placeholder="0.00000" step="any" />
+        </div>
+        <div class="field" id="tp4-field" style="display:none">
+          <label class="field-label" for="tp4">TP4 <span class="opt">(optionnel)</span></label>
+          <input type="number" id="tp4" placeholder="0.00000" step="any" />
+        </div>
+        <div class="field" id="tp5-field" style="display:none">
+          <label class="field-label" for="tp5">TP5 <span class="opt">(optionnel)</span></label>
+          <input type="number" id="tp5" placeholder="0.00000" step="any" />
+        </div>
+
+        <button type="button" id="btn-add-tp">+ AJOUTER TP</button>
+      </div>
+    </div>
+
+    <!-- ── 7. Stop Loss ── -->
+    <div class="card">
+      <div class="card-label">Stop Loss ❌</div>
+      <div class="field" id="wrap-sl">
+        <label class="field-label" for="sl">Prix du SL <span>*</span></label>
+        <input type="number" id="sl" placeholder="0.00000" step="any" />
+        <div class="err-msg">Obligatoire.</div>
+      </div>
+    </div>
+
+    <!-- ── 8. Commentaire ── -->
+    <div class="card">
+      <div class="field">
+        <label class="field-label" for="comment">Commentaire 📝 <span class="opt">(optionnel)</span></label>
+        <textarea id="comment" placeholder="Analyse technique, confluences, raison du setup..."></textarea>
+      </div>
+    </div>
+
+    <!-- ── 9. Photo ── -->
+    <div class="card" id="card-photo">
+      <div class="card-label">Graphique 📸 <span style="color:var(--red)">*</span></div>
+      <div id="wrap-photo">
+        <label class="photo-label" for="photo-input" id="photo-drop">
+          <span class="icon">🖼️</span>
+          <span class="txt">Appuie pour ajouter une capture d'écran du graphique</span>
+          <span class="req">Image obligatoire (JPG, PNG, GIF)</span>
+        </label>
+        <input type="file" id="photo-input" accept="image/*" />
+        <div class="err-msg" id="err-photo">Une image est obligatoire.</div>
+      </div>
+      <div id="photo-preview">
+        <img id="preview-img" src="" alt="Aperçu" />
+        <button type="button" class="remove-btn" id="remove-photo">✕</button>
+      </div>
+    </div>
+
+    <!-- ── Bouton Valider ── -->
+    <button type="submit" id="btn-submit">✅ VALIDER LE SETUP</button>
+
+  </form>
+
+  <div id="toast"></div>
+
+  <script>
+    // ── Telegram Web App init ──────────────────────────────────────
+    const tg = window.Telegram?.WebApp;
+    if (tg) {
+      tg.ready();
+      tg.expand();
+    }
+
+    // ── Direction (LONG / SHORT) ──────────────────────────────────
+    let direction = null;
+    document.querySelectorAll('.dir-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.dir-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        direction = btn.dataset.dir;
+        document.getElementById('card-dir').classList.remove('has-error');
+      });
+    });
+
+    // ── TP3/4/5 toggle ────────────────────────────────────────────
+    const tpFields = ['tp3','tp4','tp5'];
+    let tpNext = 0;
+    const btnAddTp = document.getElementById('btn-add-tp');
+    btnAddTp.addEventListener('click', () => {
+      if (tpNext < tpFields.length) {
+        document.getElementById(tpFields[tpNext] + '-field').style.display = 'flex';
+        tpNext++;
+      }
+      if (tpNext >= tpFields.length) btnAddTp.style.display = 'none';
+    });
+
+    // ── Market toggle → disable PEH ────────────────────────────────
+    const marketToggle = document.getElementById('market-toggle');
+    const pehInput     = document.getElementById('peh');
+    const pebInput     = document.getElementById('peb');
+    marketToggle.addEventListener('change', () => {
+      const market = marketToggle.checked;
+      pehInput.disabled = market;
+      pebInput.disabled = market;
+      if (market) {
+        pehInput.value = '';
+        pebInput.value = '';
+        document.getElementById('wrap-peh').classList.remove('has-error');
+      }
+    });
+
+    // ── Breakeven → show prix spécifique ───────────────────────────
+    const beSelect = document.getElementById('breakeven');
+    const beWrap   = document.getElementById('wrap-be-prix');
+    beSelect.addEventListener('change', () => {
+      beWrap.style.display = beSelect.value === 'PRIX_SPECIFIQUE' ? 'flex' : 'none';
+    });
+
+    // ── Photo upload & preview ─────────────────────────────────────
+    const photoInput   = document.getElementById('photo-input');
+    const previewBox   = document.getElementById('photo-preview');
+    const previewImg   = document.getElementById('preview-img');
+    const photoDrop    = document.getElementById('photo-drop');
+    const removeBtn    = document.getElementById('remove-photo');
+    const wrapPhoto    = document.getElementById('wrap-photo');
+    let photoFile = null;
+
+    photoInput.addEventListener('change', () => {
+      const file = photoInput.files[0];
+      if (!file) return;
+      photoFile = file;
+      const url = URL.createObjectURL(file);
+      previewImg.src = url;
+      photoDrop.style.display = 'none';
+      previewBox.style.display = 'block';
+      wrapPhoto.classList.remove('has-error');
+    });
+
+    removeBtn.addEventListener('click', () => {
+      photoFile = null;
+      photoInput.value = '';
+      previewImg.src = '';
+      previewBox.style.display = 'none';
+      photoDrop.style.display = 'flex';
+    });
+
+    // ── Toast helper ───────────────────────────────────────────────
+    function showToast(msg, duration = 2500) {
+      const t = document.getElementById('toast');
+      t.textContent = msg;
+      t.classList.add('show');
+      setTimeout(() => t.classList.remove('show'), duration);
+    }
+
+    // ── Validation ─────────────────────────────────────────────────
+    function validate() {
+      let ok = true;
+
+      // Direction
+      if (!direction) {
+        document.getElementById('card-dir').classList.add('has-error');
+        ok = false;
+      }
+
+      // Actif
+      const actifWrap = document.getElementById('wrap-actif');
+      actifWrap.classList.toggle('has-error', !document.getElementById('actif').value.trim());
+      if (!document.getElementById('actif').value.trim()) ok = false;
+
+      // Style
+      const styleWrap = document.getElementById('wrap-style');
+      styleWrap.classList.toggle('has-error', !document.getElementById('style').value);
+      if (!document.getElementById('style').value) ok = false;
+
+      // PEH (seulement si market=off)
+      if (!marketToggle.checked) {
+        const pehWrap = document.getElementById('wrap-peh');
+        pehWrap.classList.toggle('has-error', !pehInput.value);
+        if (!pehInput.value) ok = false;
+      }
+
+      // TP1
+      const tp1Wrap = document.getElementById('wrap-tp1');
+      tp1Wrap.classList.toggle('has-error', !document.getElementById('tp1').value);
+      if (!document.getElementById('tp1').value) ok = false;
+
+      // SL
+      const slWrap = document.getElementById('wrap-sl');
+      slWrap.classList.toggle('has-error', !document.getElementById('sl').value);
+      if (!document.getElementById('sl').value) ok = false;
+
+      // Photo
+      const photoWrap = document.getElementById('wrap-photo');
+      photoWrap.classList.toggle('has-error', !photoFile);
+      if (!photoFile) ok = false;
+
+      return ok;
+    }
+
+    // ── Submit ─────────────────────────────────────────────────────
+    document.getElementById('setup-form').addEventListener('submit', e => {
+      e.preventDefault();
+
+      if (!validate()) {
+        showToast('⚠️ Remplis les champs obligatoires !');
+        const firstErr = document.querySelector('.has-error');
+        if (firstErr) firstErr.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        return;
+      }
+
+      const payload = {
+        direction,
+        actif:      document.getElementById('actif').value.trim().toUpperCase(),
+        style:      document.getElementById('style').value,
+        entree_market: marketToggle.checked,
+        peh:        pehInput.value   || null,
+        peb:        pebInput.value   || null,
+        breakeven:  beSelect.value,
+        be_prix:    document.getElementById('be-prix').value || null,
+        tp1:        document.getElementById('tp1').value,
+        tp2:        document.getElementById('tp2').value || null,
+        tp3:        document.getElementById('tp3').value || null,
+        tp4:        document.getElementById('tp4').value || null,
+        tp5:        document.getElementById('tp5').value || null,
+        sl:         document.getElementById('sl').value,
+        comment:    document.getElementById('comment').value.trim() || null,
+        photo_name: photoFile?.name || null,
+      };
+
+      console.log('=== SETUP PAYLOAD ===', payload);
+
+      // Feedback visuel
+      const btn = document.getElementById('btn-submit');
+      btn.textContent = '⏳ Envoi en cours…';
+      btn.disabled = true;
+
+      // --- TODO: remplacer ce setTimeout par l'appel au backend Python ---
+      setTimeout(() => {
+        btn.textContent = '✅ VALIDER LE SETUP';
+        btn.disabled = false;
+        showToast('✅ Setup publié avec succès !', 3000);
+        console.log('Backend à connecter ici (fetch POST /publish)');
+      }, 1200);
+    });
+
+    // ── Clear error on input ───────────────────────────────────────
+    ['actif','style','peh','tp1','sl'].forEach(id => {
+      const el = document.getElementById(id);
+      el?.addEventListener('input', () => {
+        el.closest('.field')?.classList.remove('has-error');
+      });
+    });
+  </script>
+
+</body>
+</html>
