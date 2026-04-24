@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "api/publish.py": {
+      "runtime": "vercel-python@4.3.0"
+    }
+  }
+}
