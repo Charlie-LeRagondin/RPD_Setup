@@ -591,7 +591,7 @@
     }
 
     // ── Submit ─────────────────────────────────────────────────────
-    document.getElementById('setup-form').addEventListener('submit', e => {
+    document.getElementById('setup-form').addEventListener('submit', async e => {
       e.preventDefault();
 
       if (!validate()) {
@@ -601,39 +601,65 @@
         return;
       }
 
-      const payload = {
-        direction,
-        actif:      document.getElementById('actif').value.trim().toUpperCase(),
-        style:      document.getElementById('style').value,
-        entree_market: marketToggle.checked,
-        peh:        pehInput.value   || null,
-        peb:        pebInput.value   || null,
-        breakeven:  beSelect.value,
-        be_prix:    document.getElementById('be-prix').value || null,
-        tp1:        document.getElementById('tp1').value,
-        tp2:        document.getElementById('tp2').value || null,
-        tp3:        document.getElementById('tp3').value || null,
-        tp4:        document.getElementById('tp4').value || null,
-        tp5:        document.getElementById('tp5').value || null,
-        sl:         document.getElementById('sl').value,
-        comment:    document.getElementById('comment').value.trim() || null,
-        photo_name: photoFile?.name || null,
-      };
-
-      console.log('=== SETUP PAYLOAD ===', payload);
-
-      // Feedback visuel
       const btn = document.getElementById('btn-submit');
       btn.textContent = '⏳ Envoi en cours…';
       btn.disabled = true;
 
-      // --- TODO: remplacer ce setTimeout par l'appel au backend Python ---
-      setTimeout(() => {
-        btn.textContent = '✅ VALIDER LE SETUP';
-        btn.disabled = false;
-        showToast('✅ Setup publié avec succès !', 3000);
-        console.log('Backend à connecter ici (fetch POST /publish)');
-      }, 1200);
+      // Convertir la photo en base64
+      const toBase64 = file => new Promise((res, rej) => {
+        const r = new FileReader();
+        r.onload  = () => res(r.result.split(',')[1]);
+        r.onerror = rej;
+        r.readAsDataURL(file);
+      });
+
+      const photo_b64 = photoFile ? await toBase64(photoFile) : null;
+
+      const payload = {
+        direction,
+        actif:         document.getElementById('actif').value.trim().toUpperCase(),
+        style:         document.getElementById('style').value,
+        entree_market: marketToggle.checked,
+        peh:           pehInput.value   || null,
+        peb:           pebInput.value   || null,
+        breakeven:     beSelect.value,
+        be_prix:       document.getElementById('be-prix').value || null,
+        tp1:           document.getElementById('tp1').value,
+        tp2:           document.getElementById('tp2').value || null,
+        tp3:           document.getElementById('tp3').value || null,
+        tp4:           document.getElementById('tp4').value || null,
+        tp5:           document.getElementById('tp5').value || null,
+        sl:            document.getElementById('sl').value,
+        comment:       document.getElementById('comment').value.trim() || null,
+        photo_b64,
+      };
+
+      try {
+        const resp = await fetch('/api/publish', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify(payload),
+        });
+        const result = await resp.json();
+
+        if (result.ok) {
+          showToast('✅ Setup publié dans le canal !', 3000);
+          document.getElementById('setup-form').reset();
+          direction = null;
+          document.querySelectorAll('.dir-btn').forEach(b => b.classList.remove('active'));
+          photoFile = null;
+          previewImg.src = '';
+          previewBox.style.display = 'none';
+          photoDrop.style.display  = 'flex';
+        } else {
+          showToast('❌ Erreur Telegram : ' + JSON.stringify(result.tg?.description || result.error));
+        }
+      } catch (err) {
+        showToast('❌ Erreur réseau : ' + err.message);
+      }
+
+      btn.textContent = '✅ VALIDER LE SETUP';
+      btn.disabled = false;
     });
 
     // ── Clear error on input ───────────────────────────────────────
