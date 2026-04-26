@@ -130,14 +130,21 @@ def handle_setup(msg: dict):
         return
 
     # ── 4. Bon groupe, bon topic ──────────────────────────────────
-    # Le bouton ouvre la Mini App directement, le message disparaît après 8s
-    _send_then_delete(
+    # Envoyer le message avec le bouton
+    result = _send(
         chat_id,
         f"🎯 {m} :",
-        delay=8,
         reply_markup=_launcher_kb(user_id),
         thread_id=TOPIC_ID,
     )
+    # Si le send avec web_app échoue (WEBAPP_URL vide ?), fallback texte simple
+    if not result.get('message_id'):
+        result = _send(chat_id, f"🎯 {m} : utilise /setup en privé.", thread_id=TOPIC_ID)
+    # Supprimer après 3s (budget sûr : ~4s total << 10s Vercel)
+    bot_msg_id = result.get('message_id')
+    if bot_msg_id:
+        time.sleep(3)
+        _delete(chat_id, bot_msg_id)
 
 
 
