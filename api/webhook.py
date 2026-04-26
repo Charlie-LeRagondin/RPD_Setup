@@ -36,7 +36,6 @@ def _delete(chat_id, message_id):
 
 def _send_then_delete(chat_id, text, delay=5, parse_mode='HTML',
                       reply_markup=None, thread_id=None):
-    """Envoie un message et le supprime après `delay` secondes."""
     result = _send(chat_id, text, parse_mode=parse_mode,
                    reply_markup=reply_markup, thread_id=thread_id)
     msg_id = result.get('message_id')
@@ -44,9 +43,22 @@ def _send_then_delete(chat_id, text, delay=5, parse_mode='HTML',
         time.sleep(delay)
         _delete(chat_id, msg_id)
 
+def _answer_cb(callback_query_id, text=None, show_alert=False):
+    payload = {'callback_query_id': callback_query_id}
+    if text:
+        payload['text'] = text
+        payload['show_alert'] = show_alert
+    req.post(f"{TG}/answerCallbackQuery", json=payload, timeout=5)
+
 def _webapp_kb():
     return {'inline_keyboard': [[
         {'text': '🚀 Ouvrir le setup', 'web_app': {'url': WEBAPP_URL}}
+    ]]}
+
+def _launcher_kb(user_id):
+    """Bouton web_app — ouvre la Mini App directement au clic."""
+    return {'inline_keyboard': [[
+        {'text': '🚀 Lancer le configurateur', 'web_app': {'url': WEBAPP_URL}}
     ]]}
 
 def _deeplink_kb(bot_username):
@@ -68,7 +80,7 @@ def _bot_username() -> str:
     except Exception:
         return 'bot'
 
-# ── Handlers de commandes ─────────────────────────────────────────────────────
+# ── Handlers ──────────────────────────────────────────────────────────────────
 
 def handle_start(msg: dict):
     chat_id = msg['chat']['id']
@@ -90,6 +102,8 @@ def handle_setup(msg: dict):
     chat_id   = chat['id']
     chat_type = chat.get('type', '')
     thread_id = msg.get('message_thread_id')
+    msg_id    = msg.get('message_id')
+    user_id   = user.get('id')
     m         = _mention(user)
 
     # ── 1. Conversation privée ────────────────────────────────────
@@ -103,6 +117,9 @@ def handle_setup(msg: dict):
     if chat_id != GROUP_ID:
         return
 
+    # Supprimer la commande /setup originale dans tous les cas groupe
+    _delete(chat_id, msg_id)
+
     # ── 3. Bon groupe, mauvais topic ──────────────────────────────
     if (thread_id or 0) != TOPIC_ID:
         _send_then_delete(
@@ -113,38 +130,16 @@ def handle_setup(msg: dict):
         return
 
     # ── 4. Bon groupe, bon topic ──────────────────────────────────
-    # Notification dans le topic (supprimée après 5 s)
-    notif = _send(chat_id,
-                  f"🎯 {m}, je t'envoie le formulaire en privé ⬇️",
-                  thread_id=TOPIC_ID)
-    notif_id = notif.get('message_id')
+    # Le bouton ouvre la Mini App directement, le message disparaît après 8s
+    _send_then_delete(
+        chat_id,
+        f"🎯 {m} :",
+        delay=8,
+        reply_markup=_launcher_kb(user_id),
+        thread_id=TOPIC_ID,
+    )
 
-    # Tentative d'envoi en MP
-    user_id = user.get('id')
-    r = req.post(f"{TG}/sendMessage", json={
-        'chat_id':      user_id,
-        'text':         '🎯 Remplis le formulaire pour publier ton setup :',
-        'reply_markup': _webapp_kb(),
-    }, timeout=5)
-    resp = r.json()
 
-    if not resp.get('ok') and resp.get('error_code') == 403:
-        # Utilisateur n'a jamais démarré le bot
-        bot_user = _bot_username()
-        fallback = _send(
-            chat_id,
-            f"👋 {m}, démarre le bot une première fois en cliquant ci-dessous, "
-            f"puis retape /setup ici.",
-            reply_markup=_deeplink_kb(bot_user),
-            thread_id=TOPIC_ID,
-        )
-        fallback_id = fallback.get('message_id')
-        time.sleep(5)
-        if notif_id:    _delete(chat_id, notif_id)
-        if fallback_id: _delete(chat_id, fallback_id)
-    else:
-        time.sleep(5)
-        if notif_id: _delete(chat_id, notif_id)
 
 
 # ── Handler HTTP Vercel ───────────────────────────────────────────────────────
@@ -155,8 +150,9 @@ class handler(BaseHTTPRequestHandler):
         try:
             length = int(self.headers.get('Content-Length', 0))
             update = json.loads(self.rfile.read(length))
-            msg    = update.get('message') or update.get('channel_post')
 
+            # Commandes texte
+            msg = update.get('message') or update.get('channel_post')
             if msg:
                 text = msg.get('text', '')
                 if text.startswith('/start'):
@@ -164,8 +160,9 @@ class handler(BaseHTTPRequestHandler):
                 elif text.startswith('/setup'):
                     handle_setup(msg)
 
+
         except Exception:
-            pass  # Ne jamais crasher, toujours répondre 200 à Telegram
+            pass
 
         self.send_response(200)
         self.send_header('Content-type', 'application/json')
