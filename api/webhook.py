@@ -34,15 +34,6 @@ def _delete(chat_id, message_id):
     except Exception:
         pass
 
-def _send_then_delete(chat_id, text, delay=5, parse_mode='HTML',
-                      reply_markup=None, thread_id=None):
-    result = _send(chat_id, text, parse_mode=parse_mode,
-                   reply_markup=reply_markup, thread_id=thread_id)
-    msg_id = result.get('message_id')
-    if msg_id:
-        time.sleep(delay)
-        _delete(chat_id, msg_id)
-
 def _answer_cb(callback_query_id, text=None, show_alert=False):
     payload = {'callback_query_id': callback_query_id}
     if text:
@@ -52,27 +43,19 @@ def _answer_cb(callback_query_id, text=None, show_alert=False):
 
 def _webapp_kb():
     return {'inline_keyboard': [[
-        {'text': '🚀 Ouvrir le setup', 'web_app': {'url': WEBAPP_URL}}
+        {'text': '🚀 Ouvrir le Configurateur', 'web_app': {'url': WEBAPP_URL}}
     ]]}
 
-def _launcher_kb(user_id):
-    """Bouton web_app — ouvre la Mini App directement au clic."""
+def _url_kb(url, label='🔥 Ouvrir le Configurateur'):
     return {'inline_keyboard': [[
-        {'text': '🚀 Lancer le configurateur', 'web_app': {'url': WEBAPP_URL}}
-    ]]}
-
-def _deeplink_kb(bot_username):
-    return {'inline_keyboard': [[
-        {'text': "▶️ Démarrer le bot d'abord",
-         'url': f"https://t.me/{bot_username}?start=from_setup"}
+        {'text': label, 'url': url}
     ]]}
 
 def _mention(user: dict) -> str:
-    if user.get('username'):
-        return f"@{user['username']}"
-    first = user.get('first_name', 'utilisateur')
     uid   = user.get('id', '')
-    return f'<a href="tg://user?id={uid}">{first}</a>'
+    first = user.get('first_name', '')
+    name  = first or user.get('username', '') or 'trader'
+    return f'<a href="tg://user?id={uid}">{name}</a>'
 
 def _bot_username() -> str:
     try:
@@ -85,14 +68,22 @@ def _bot_username() -> str:
 def handle_start(msg: dict):
     chat_id = msg['chat']['id']
     text    = msg.get('text', '')
+
+    # from_setup_{group_msg_id}
     if 'from_setup' in text:
+        parts = text.split('from_setup_', 1)
+        if len(parts) == 2:
+            try:
+                group_msg_id = int(parts[1].split()[0])
+                _delete(GROUP_ID, group_msg_id)
+            except (ValueError, IndexError):
+                pass
         _send(chat_id,
-              '✅ Bot activé. Retourne dans le topic SETUP et retape /setup, '
-              'ou utilise le bouton ci-dessous directement.',
+              '✅ Configurateur prêt — clique pour ouvrir :',
               reply_markup=_webapp_kb())
     else:
         _send(chat_id,
-              '👋 Bonjour ! Tape /setup pour publier un setup de trading.',
+              '👋 Bonjour ! Tape /setup dans le topic setup pour publier un setup de trading.',
               reply_markup=_webapp_kb())
 
 
@@ -103,7 +94,6 @@ def handle_setup(msg: dict):
     chat_type = chat.get('type', '')
     thread_id = msg.get('message_thread_id')
     msg_id    = msg.get('message_id')
-    user_id   = user.get('id')
     m         = _mention(user)
 
     # ── 1. Conversation privée ────────────────────────────────────
@@ -117,36 +107,46 @@ def handle_setup(msg: dict):
     if chat_id != GROUP_ID:
         return
 
-    # Supprimer la commande /setup originale dans tous les cas groupe
+    # Supprimer la commande /setup originale
     _delete(chat_id, msg_id)
 
     # ── 3. Bon groupe, mauvais topic ──────────────────────────────
     if (thread_id or 0) != TOPIC_ID:
-        _send_then_delete(
+        result = _send(
             chat_id,
             f"❌ {m}, la commande /setup n'est disponible que dans le topic dédié aux setups.",
-            delay=5,
+            thread_id=thread_id,
         )
+        err_id = result.get('message_id')
+        if err_id:
+            time.sleep(5)
+            _delete(chat_id, err_id)
         return
 
     # ── 4. Bon groupe, bon topic ──────────────────────────────────
-    # Envoyer le message avec le bouton
+    bot_username = _bot_username()
+    deep_link    = f"https://t.me/{bot_username}?start=from_setup_PLACEHOLDER"
+
+    # Envoyer d'abord sans msg_id pour obtenir le message_id du bot
     result = _send(
         chat_id,
-        f"🎯 {m} :",
-        reply_markup=_launcher_kb(user_id),
+        f"🚀 {m}, accès validé. Clique ci-dessous :",
+        reply_markup=_url_kb(deep_link),
         thread_id=TOPIC_ID,
     )
-    # Si le send avec web_app échoue (WEBAPP_URL vide ?), fallback texte simple
-    if not result.get('message_id'):
-        result = _send(chat_id, f"🎯 {m} : utilise /setup en privé.", thread_id=TOPIC_ID)
-    # Supprimer après 3s (budget sûr : ~4s total << 10s Vercel)
     bot_msg_id = result.get('message_id')
+
     if bot_msg_id:
-        time.sleep(3)
+        # Mettre à jour le bouton avec le vrai message_id pour suppression au clic
+        real_link = f"https://t.me/{bot_username}?start=from_setup_{bot_msg_id}"
+        req.post(f"{TG}/editMessageReplyMarkup", json={
+            'chat_id':    chat_id,
+            'message_id': bot_msg_id,
+            'reply_markup': _url_kb(real_link),
+        }, timeout=5)
+        # Auto-delete dans le budget Vercel (~5s)
+        time.sleep(5)
         _delete(chat_id, bot_msg_id)
-
-
 
 
 # ── Handler HTTP Vercel ───────────────────────────────────────────────────────
@@ -158,7 +158,6 @@ class handler(BaseHTTPRequestHandler):
             length = int(self.headers.get('Content-Length', 0))
             update = json.loads(self.rfile.read(length))
 
-            # Commandes texte
             msg = update.get('message') or update.get('channel_post')
             if msg:
                 text = msg.get('text', '')
@@ -166,7 +165,6 @@ class handler(BaseHTTPRequestHandler):
                     handle_start(msg)
                 elif text.startswith('/setup'):
                     handle_setup(msg)
-
 
         except Exception:
             pass
