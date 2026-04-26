@@ -13,7 +13,8 @@ except Exception:
     _PARIS = None
 
 BOT_TOKEN    = os.environ.get('BOT_TOKEN')
-CHANNEL_ID   = os.environ.get('CHANNEL_ID')
+GROUP_ID     = os.environ.get('GROUP_ID')
+TOPIC_ID     = int(os.environ.get('TOPIC_ID', 0)) or None
 COUNTER_FILE = '/tmp/counter.txt'
 
 # ── Compteur setup ────────────────────────────────────────────────────────────
@@ -160,18 +161,18 @@ class handler(BaseHTTPRequestHandler):
 
             if data.get('photo_b64'):
                 photo_bytes = base64.b64decode(data['photo_b64'])
+                extra = {'message_thread_id': TOPIC_ID} if TOPIC_ID else {}
                 r = req.post(
                     f"{tg}/sendPhoto",
-                    data={'chat_id': CHANNEL_ID, 'caption': caption, 'parse_mode': 'HTML'},
+                    data={'chat_id': GROUP_ID, 'caption': caption, 'parse_mode': 'HTML', **extra},
                     files={'photo': ('chart.jpg', photo_bytes, 'image/jpeg')},
                     timeout=15,
                 )
             else:
-                r = req.post(
-                    f"{tg}/sendMessage",
-                    json={'chat_id': CHANNEL_ID, 'text': caption, 'parse_mode': 'HTML'},
-                    timeout=15,
-                )
+                payload = {'chat_id': GROUP_ID, 'text': caption, 'parse_mode': 'HTML'}
+                if TOPIC_ID:
+                    payload['message_thread_id'] = TOPIC_ID
+                r = req.post(f"{tg}/sendMessage", json=payload, timeout=15)
 
             result = r.json()
             status = 200 if result.get('ok') else 502
