@@ -12,10 +12,10 @@ try:
 except Exception:
     _PARIS = None
 
-BOT_TOKEN    = os.environ.get('BOT_TOKEN')
-GROUP_ID     = os.environ.get('GROUP_ID')
-TOPIC_ID     = int(os.environ.get('TOPIC_ID', 0)) or None
-COUNTER_FILE = '/tmp/counter.txt'
+BOT_TOKEN        = os.environ.get('BOT_TOKEN')
+GROUP_ID         = os.environ.get('GROUP_ID')
+PUBLISH_PUBLISH_TOPIC_ID = int(os.environ.get('PUBLISH_PUBLISH_TOPIC_ID', 0)) or None
+COUNTER_FILE     = '/tmp/counter.txt'
 
 # ── Compteur setup ────────────────────────────────────────────────────────────
 
@@ -161,7 +161,7 @@ class handler(BaseHTTPRequestHandler):
 
             if data.get('photo_b64'):
                 photo_bytes = base64.b64decode(data['photo_b64'])
-                extra = {'message_thread_id': TOPIC_ID} if TOPIC_ID else {}
+                extra = {'message_thread_id': PUBLISH_TOPIC_ID} if PUBLISH_TOPIC_ID else {}
                 r = req.post(
                     f"{tg}/sendPhoto",
                     data={'chat_id': GROUP_ID, 'caption': caption, 'parse_mode': 'HTML', **extra},
@@ -170,8 +170,8 @@ class handler(BaseHTTPRequestHandler):
                 )
             else:
                 payload = {'chat_id': GROUP_ID, 'text': caption, 'parse_mode': 'HTML'}
-                if TOPIC_ID:
-                    payload['message_thread_id'] = TOPIC_ID
+                if PUBLISH_TOPIC_ID:
+                    payload['message_thread_id'] = PUBLISH_TOPIC_ID
                 r = req.post(f"{tg}/sendMessage", json=payload, timeout=15)
 
             result = r.json()
