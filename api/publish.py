@@ -14,7 +14,7 @@ except Exception:
 
 BOT_TOKEN        = os.environ.get('BOT_TOKEN')
 GROUP_ID         = os.environ.get('GROUP_ID')
-PUBLISH_PUBLISH_TOPIC_ID = int(os.environ.get('PUBLISH_PUBLISH_TOPIC_ID', 0)) or None
+PUBLISH_TOPIC_ID = int(os.environ.get('PUBLISH_TOPIC_ID', 0)) or None
 COUNTER_FILE     = '/tmp/counter.txt'
 
 # ── Compteur setup ────────────────────────────────────────────────────────────
