@@ -1,5 +1,5 @@
 """
-Webhook Telegram — commande /setup et /start
+Webhook Telegram — /setup, /start + callbacks inline keyboard
 Hébergé sur Vercel (fonction serverless, limite 10 s d'exécution).
 """
 
@@ -9,12 +9,30 @@ import os
 import time
 import requests as req
 
-BOT_TOKEN  = os.environ.get('BOT_TOKEN') or os.environ.get('TELEGRAM_BOT_TOKEN')
-GROUP_ID   = int(os.environ.get('GROUP_ID', 0))
-TOPIC_ID   = int(os.environ.get('TOPIC_ID', 0))
-WEBAPP_URL = os.environ.get('WEBAPP_URL', '')
+BOT_TOKEN        = os.environ.get('BOT_TOKEN') or os.environ.get('TELEGRAM_BOT_TOKEN')
+GROUP_ID         = int(os.environ.get('GROUP_ID', 0))
+TOPIC_ID         = int(os.environ.get('TOPIC_ID', 0))
+PUBLISH_TOPIC_ID = int(os.environ.get('PUBLISH_TOPIC_ID', 0)) or None
+WEBAPP_URL       = os.environ.get('WEBAPP_URL', '')
 
-TG = f"https://api.telegram.org/bot{BOT_TOKEN}"
+TG         = f"https://api.telegram.org/bot{BOT_TOKEN}"
+STATE_FILE = '/tmp/setups_state.json'
+
+# ── State ─────────────────────────────────────────────────────────────────────
+
+def _load_state():
+    try:
+        with open(STATE_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def _save_state(state):
+    try:
+        with open(STATE_FILE, 'w') as f:
+            json.dump(state, f)
+    except Exception:
+        pass
 
 # ── Helpers Telegram ──────────────────────────────────────────────────────────
 
@@ -37,9 +55,16 @@ def _delete(chat_id, message_id):
 def _answer_cb(callback_query_id, text=None, show_alert=False):
     payload = {'callback_query_id': callback_query_id}
     if text:
-        payload['text'] = text
+        payload['text']       = text
         payload['show_alert'] = show_alert
     req.post(f"{TG}/answerCallbackQuery", json=payload, timeout=5)
+
+def _edit_keyboard(chat_id, message_id, keyboard):
+    req.post(f"{TG}/editMessageReplyMarkup", json={
+        'chat_id':      chat_id,
+        'message_id':   message_id,
+        'reply_markup': keyboard,
+    }, timeout=5)
 
 def _webapp_kb():
     return {'inline_keyboard': [[
@@ -47,9 +72,7 @@ def _webapp_kb():
     ]]}
 
 def _url_kb(url, label='🔥 Ouvrir le Configurateur'):
-    return {'inline_keyboard': [[
-        {'text': label, 'url': url}
-    ]]}
+    return {'inline_keyboard': [[{'text': label, 'url': url}]]}
 
 def _mention(user: dict) -> str:
     uid   = user.get('id', '')
@@ -63,13 +86,186 @@ def _bot_username() -> str:
     except Exception:
         return 'bot'
 
-# ── Handlers ──────────────────────────────────────────────────────────────────
+# ── Calcul R (pour notifs TP) ─────────────────────────────────────────────────
+
+def _calc_r(tp_val, entry, sl, direction):
+    try:
+        tp    = float(tp_val)
+        one_r = abs(entry - float(sl))
+        if one_r == 0:
+            return ''
+        r = (tp - entry) / one_r if direction == 'LONG' else (entry - tp) / one_r
+        if r <= 0:
+            return ' (R invalide)'
+        return f' (+{r:.1f}R)'
+    except Exception:
+        return ''
+
+# ── Keyboard builder ──────────────────────────────────────────────────────────
+
+def _build_keyboard(setup_id, setup):
+    rows = []
+    sid  = str(setup_id)
+
+    entry_type = setup['entry_type']
+    if entry_type == 'PEH':
+        hit = setup['peh_hit']
+        rows.append([{
+            'text':          '⚠️ PEH CANCEL' if hit else '➡️ PEH IN',
+            'callback_data': f'peh_cancel:{sid}' if hit else f'peh_in:{sid}',
+        }])
+    elif entry_type == 'PEH_PEB':
+        rows.append([
+            {
+                'text':          '⚠️ PEH CANCEL' if setup['peh_hit'] else '➡️ PEH IN',
+                'callback_data': f'peh_cancel:{sid}' if setup['peh_hit'] else f'peh_in:{sid}',
+            },
+            {
+                'text':          '⚠️ PEB CANCEL' if setup['peb_hit'] else '➡️ PEB IN',
+                'callback_data': f'peb_cancel:{sid}' if setup['peb_hit'] else f'peb_in:{sid}',
+            },
+        ])
+
+    tps    = setup['tps']
+    tp_hit = setup['tp_hit']
+    i = 0
+    while i < len(tps):
+        row = []
+        for j in range(2):
+            idx = i + j
+            if idx < len(tps):
+                n   = idx + 1
+                hit = tp_hit[idx]
+                row.append({
+                    'text':          f'⚠️ TP{n} CANCEL' if hit else f'🎯 TP{n}',
+                    'callback_data': f'tp_cancel:{sid}:{n}' if hit else f'tp_hit:{sid}:{n}',
+                })
+        rows.append(row)
+        i += 2
+
+    rows.append([{'text': '🛡 Passage BE', 'callback_data': f'be_pass:{sid}'}])
+    rows.append([
+        {'text': '❌ SL',       'callback_data': f'sl_hit:{sid}'},
+        {'text': '🛠 Clôturer', 'callback_data': f'close:{sid}'},
+    ])
+    return {'inline_keyboard': rows}
+
+# ── Permissions ───────────────────────────────────────────────────────────────
+
+def _is_authorized(user_id, setup):
+    if user_id == setup.get('creator_id'):
+        return True
+    try:
+        r      = req.post(f"{TG}/getChatMember",
+                          json={'chat_id': GROUP_ID, 'user_id': user_id}, timeout=5)
+        status = r.json().get('result', {}).get('status', '')
+        return status in ('creator', 'administrator')
+    except Exception:
+        return False
+
+# ── Callback handler ──────────────────────────────────────────────────────────
+
+def handle_callback(cb: dict):
+    query_id = cb['id']
+    user     = cb.get('from', {})
+    user_id  = user.get('id')
+    data     = cb.get('data', '')
+
+    parts    = data.split(':')
+    action   = parts[0]
+    setup_id = parts[1] if len(parts) > 1 else None
+
+    if not setup_id:
+        _answer_cb(query_id)
+        return
+
+    state = _load_state()
+    setup = state.get(str(setup_id))
+
+    if not setup:
+        _answer_cb(query_id, "❌ Setup introuvable")
+        return
+
+    if not _is_authorized(user_id, setup):
+        _answer_cb(query_id, "❌ Réservé au créateur du setup et aux admins")
+        return
+
+    chat_id    = setup.get('chat_id')
+    message_id = setup.get('message_id')
+
+    # ── Stubs (Prompt 2) ──────────────────────────────────────────────────────
+    if action in ('be_pass', 'sl_hit', 'close'):
+        _answer_cb(query_id, "🚧 Bientôt disponible (prompt 2)")
+        return
+
+    # ── PEH ───────────────────────────────────────────────────────────────────
+    if action == 'peh_in':
+        setup['peh_hit']     = True
+        state[str(setup_id)] = setup
+        _save_state(state)
+        _edit_keyboard(chat_id, message_id, _build_keyboard(setup_id, setup))
+        _send(chat_id, f"✅ #SETUP_{setup_id} | PEH IN ✅", thread_id=PUBLISH_TOPIC_ID)
+        _answer_cb(query_id)
+
+    elif action == 'peh_cancel':
+        setup['peh_hit']     = False
+        state[str(setup_id)] = setup
+        _save_state(state)
+        _edit_keyboard(chat_id, message_id, _build_keyboard(setup_id, setup))
+        _send(chat_id, f"⚠️ #SETUP_{setup_id} | CORRECTION : PEH IN annulé", thread_id=PUBLISH_TOPIC_ID)
+        _answer_cb(query_id)
+
+    # ── PEB ───────────────────────────────────────────────────────────────────
+    elif action == 'peb_in':
+        setup['peb_hit']     = True
+        state[str(setup_id)] = setup
+        _save_state(state)
+        _edit_keyboard(chat_id, message_id, _build_keyboard(setup_id, setup))
+        _send(chat_id, f"✅ #SETUP_{setup_id} | PEB IN ✅", thread_id=PUBLISH_TOPIC_ID)
+        _answer_cb(query_id)
+
+    elif action == 'peb_cancel':
+        setup['peb_hit']     = False
+        state[str(setup_id)] = setup
+        _save_state(state)
+        _edit_keyboard(chat_id, message_id, _build_keyboard(setup_id, setup))
+        _send(chat_id, f"⚠️ #SETUP_{setup_id} | CORRECTION : PEB IN annulé", thread_id=PUBLISH_TOPIC_ID)
+        _answer_cb(query_id)
+
+    # ── TP ────────────────────────────────────────────────────────────────────
+    elif action in ('tp_hit', 'tp_cancel'):
+        n   = int(parts[2]) if len(parts) > 2 else 1
+        idx = n - 1
+        if idx < 0 or idx >= len(setup['tp_hit']):
+            _answer_cb(query_id, "❌ TP invalide")
+            return
+
+        is_hit               = (action == 'tp_hit')
+        setup['tp_hit'][idx] = is_hit
+        state[str(setup_id)] = setup
+        _save_state(state)
+        _edit_keyboard(chat_id, message_id, _build_keyboard(setup_id, setup))
+
+        if is_hit:
+            entry  = setup.get('entry_price')
+            sl     = setup.get('sl_value')
+            tp_val = setup['tps'][idx] if idx < len(setup['tps']) else None
+            r_str  = _calc_r(tp_val, entry, sl, setup['direction']) if (entry and sl and tp_val) else ''
+            _send(chat_id, f"✅ #SETUP_{setup_id} | TP{n}{r_str} ✅", thread_id=PUBLISH_TOPIC_ID)
+        else:
+            _send(chat_id, f"⚠️ #SETUP_{setup_id} | CORRECTION : TP{n} annulé", thread_id=PUBLISH_TOPIC_ID)
+
+        _answer_cb(query_id)
+
+    else:
+        _answer_cb(query_id)
+
+# ── Handlers /start et /setup ─────────────────────────────────────────────────
 
 def handle_start(msg: dict):
     chat_id = msg['chat']['id']
     text    = msg.get('text', '')
 
-    # from_setup_{group_msg_id}
     if 'from_setup' in text:
         parts = text.split('from_setup_', 1)
         if len(parts) == 2:
@@ -78,9 +274,7 @@ def handle_start(msg: dict):
                 _delete(GROUP_ID, group_msg_id)
             except (ValueError, IndexError):
                 pass
-        _send(chat_id,
-              '✅ Configurateur prêt — clique pour ouvrir :',
-              reply_markup=_webapp_kb())
+        _send(chat_id, '✅ Configurateur prêt — clique pour ouvrir :', reply_markup=_webapp_kb())
     else:
         _send(chat_id,
               '👋 Bonjour ! Tape /setup dans le topic setup pour publier un setup de trading.',
@@ -96,21 +290,15 @@ def handle_setup(msg: dict):
     msg_id    = msg.get('message_id')
     m         = _mention(user)
 
-    # ── 1. Conversation privée ────────────────────────────────────
     if chat_type == 'private':
-        _send(chat_id,
-              '🎯 Remplis le formulaire pour publier ton setup :',
-              reply_markup=_webapp_kb())
+        _send(chat_id, '🎯 Remplis le formulaire pour publier ton setup :', reply_markup=_webapp_kb())
         return
 
-    # ── 2. Mauvais groupe → silence total ─────────────────────────
     if chat_id != GROUP_ID:
         return
 
-    # Supprimer la commande /setup originale
     _delete(chat_id, msg_id)
 
-    # ── 3. Bon groupe, mauvais topic ──────────────────────────────
     if (thread_id or 0) != TOPIC_ID:
         result = _send(
             chat_id,
@@ -123,28 +311,22 @@ def handle_setup(msg: dict):
             _delete(chat_id, err_id)
         return
 
-    # ── 4. Bon groupe, bon topic ──────────────────────────────────
     bot_username = _bot_username()
     deep_link    = f"https://t.me/{bot_username}?start=from_setup_PLACEHOLDER"
-
-    # Envoyer d'abord sans msg_id pour obtenir le message_id du bot
-    result = _send(
+    result       = _send(
         chat_id,
         f"🚀 {m}, accès validé. Clique ci-dessous :",
         reply_markup=_url_kb(deep_link),
         thread_id=TOPIC_ID,
     )
     bot_msg_id = result.get('message_id')
-
     if bot_msg_id:
-        # Mettre à jour le bouton avec le vrai message_id pour suppression au clic
         real_link = f"https://t.me/{bot_username}?start=from_setup_{bot_msg_id}"
         req.post(f"{TG}/editMessageReplyMarkup", json={
-            'chat_id':    chat_id,
-            'message_id': bot_msg_id,
+            'chat_id':      chat_id,
+            'message_id':   bot_msg_id,
             'reply_markup': _url_kb(real_link),
         }, timeout=5)
-        # Auto-delete dans le budget Vercel (~5s)
         time.sleep(5)
         _delete(chat_id, bot_msg_id)
 
@@ -165,6 +347,10 @@ class handler(BaseHTTPRequestHandler):
                     handle_start(msg)
                 elif text.startswith('/setup'):
                     handle_setup(msg)
+
+            cb = update.get('callback_query')
+            if cb:
+                handle_callback(cb)
 
         except Exception:
             pass

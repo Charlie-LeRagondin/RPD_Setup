@@ -677,7 +677,9 @@
                          .map(i => i.value).filter(v => v),
         sl:            document.getElementById('sl').value,
         comment:       document.getElementById('comment').value.trim() || null,
-        username:      tg?.initDataUnsafe?.user?.username || null,
+        username:      tg?.initDataUnsafe?.user?.username   || null,
+        user_id:       tg?.initDataUnsafe?.user?.id         || null,
+        first_name:    tg?.initDataUnsafe?.user?.first_name || null,
         photo_b64,
       };
 
