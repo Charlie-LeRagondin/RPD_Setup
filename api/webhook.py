@@ -1,11 +1,15 @@
 """
 Webhook Telegram — /setup, /start + callbacks inline keyboard
 Hébergé sur Vercel (fonction serverless, limite 10 s d'exécution).
+
+État du setup lu directement depuis le message Telegram (texte + clavier),
+sans dépendance à /tmp (non partagé entre instances Vercel).
 """
 
 from http.server import BaseHTTPRequestHandler
 import json
 import os
+import re
 import time
 import requests as req
 
@@ -15,24 +19,7 @@ TOPIC_ID         = int(os.environ.get('TOPIC_ID', 0))
 PUBLISH_TOPIC_ID = int(os.environ.get('PUBLISH_TOPIC_ID', 0)) or None
 WEBAPP_URL       = os.environ.get('WEBAPP_URL', '')
 
-TG         = f"https://api.telegram.org/bot{BOT_TOKEN}"
-STATE_FILE = '/tmp/setups_state.json'
-
-# ── State ─────────────────────────────────────────────────────────────────────
-
-def _load_state():
-    try:
-        with open(STATE_FILE) as f:
-            return json.load(f)
-    except Exception:
-        return {}
-
-def _save_state(state):
-    try:
-        with open(STATE_FILE, 'w') as f:
-            json.dump(state, f)
-    except Exception:
-        pass
+TG = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 # ── Helpers Telegram ──────────────────────────────────────────────────────────
 
@@ -86,15 +73,15 @@ def _bot_username() -> str:
     except Exception:
         return 'bot'
 
-# ── Calcul R (pour notifs TP) ─────────────────────────────────────────────────
+# ── Calcul R ──────────────────────────────────────────────────────────────────
 
 def _calc_r(tp_val, entry, sl, direction):
     try:
         tp    = float(tp_val)
-        one_r = abs(entry - float(sl))
+        one_r = abs(float(entry) - float(sl))
         if one_r == 0:
             return ''
-        r = (tp - entry) / one_r if direction == 'LONG' else (entry - tp) / one_r
+        r = (tp - float(entry)) / one_r if direction == 'LONG' else (float(entry) - tp) / one_r
         if r <= 0:
             return ' (R invalide)'
         return f' (+{r:.1f}R)'
@@ -150,10 +137,92 @@ def _build_keyboard(setup_id, setup):
     ])
     return {'inline_keyboard': rows}
 
+# ── Parse setup depuis le message Telegram ────────────────────────────────────
+
+def _parse_message(msg: dict) -> dict:
+    """
+    Reconstitue l'état complet du setup depuis le texte/caption + clavier
+    du message. Aucune dépendance à /tmp.
+    """
+    text = msg.get('text') or msg.get('caption', '')
+
+    # setup_id
+    m        = re.search(r'#SETUP_(\d+)', text)
+    setup_id = m.group(1) if m else None
+
+    # creator_id (encodé en spoiler <tg-spoiler>cid:{id}</tg-spoiler>)
+    m          = re.search(r'cid:(\d+)', text)
+    creator_id = int(m.group(1)) if m else None
+
+    # direction
+    direction = 'LONG' if '(LONG)' in text else 'SHORT'
+
+    # entry_type + entry_price
+    mkt = re.search(r'MARKET à ([\d.]+)', text)
+    if mkt:
+        entry_price = float(mkt.group(1))
+        entry_type  = 'MARKET'
+    else:
+        peh = re.search(r'PEH : ([\d.]+)', text)
+        peb = re.search(r'PEB : ([\d.]+)', text)
+        if peh and peb:
+            entry_price = (float(peh.group(1)) + float(peb.group(1))) / 2
+            entry_type  = 'PEH_PEB'
+        elif peh:
+            entry_price = float(peh.group(1))
+            entry_type  = 'PEH'
+        else:
+            entry_price = None
+            entry_type  = 'MARKET'
+
+    # sl_value
+    m        = re.search(r'SL : ([\d.]+)', text)
+    sl_value = m.group(1) if m else None
+
+    # tps (dans l'ordre du message)
+    tps = re.findall(r'TP\d+ : ([\d.]+)', text)
+
+    # État actuel depuis le clavier — callback_data est la source de vérité
+    keyboard  = (msg.get('reply_markup') or {}).get('inline_keyboard', [])
+    peh_hit   = False
+    peb_hit   = False
+    tp_states = {}
+
+    for row in keyboard:
+        for btn in row:
+            cbd = btn.get('callback_data', '')
+            if cbd.startswith('peh_cancel'):
+                peh_hit = True
+            elif cbd.startswith('peb_cancel'):
+                peb_hit = True
+            elif cbd.startswith('tp_cancel') or cbd.startswith('tp_hit'):
+                parts = cbd.split(':')
+                if len(parts) == 3:
+                    n            = int(parts[2])
+                    tp_states[n] = (parts[0] == 'tp_cancel')
+
+    tp_hit = [tp_states.get(i + 1, False) for i in range(len(tps))]
+
+    return {
+        'setup_id':    setup_id,
+        'creator_id':  creator_id,
+        'direction':   direction,
+        'entry_type':  entry_type,
+        'entry_price': entry_price,
+        'sl_value':    sl_value,
+        'tps':         tps,
+        'peh_hit':     peh_hit,
+        'peb_hit':     peb_hit,
+        'tp_hit':      tp_hit,
+        'chat_id':     msg.get('chat', {}).get('id'),
+        'message_id':  msg.get('message_id'),
+    }
+
 # ── Permissions ───────────────────────────────────────────────────────────────
 
 def _is_authorized(user_id, setup):
-    if user_id == setup.get('creator_id'):
+    creator_id = setup.get('creator_id')
+    if creator_id and user_id == creator_id:
         return True
     try:
         r      = req.post(f"{TG}/getChatMember",
@@ -170,28 +239,30 @@ def handle_callback(cb: dict):
     user     = cb.get('from', {})
     user_id  = user.get('id')
     data     = cb.get('data', '')
+    msg      = cb.get('message')
 
-    parts    = data.split(':')
-    action   = parts[0]
-    setup_id = parts[1] if len(parts) > 1 else None
-
-    if not setup_id:
+    if not msg:
         _answer_cb(query_id)
         return
 
-    state = _load_state()
-    setup = state.get(str(setup_id))
+    parts  = data.split(':')
+    action = parts[0]
 
-    if not setup:
+    # Reconstituer le setup depuis le message — pas de /tmp
+    setup = _parse_message(msg)
+
+    if not setup.get('setup_id'):
         _answer_cb(query_id, "❌ Setup introuvable")
         return
+
+    setup_id = setup['setup_id']
 
     if not _is_authorized(user_id, setup):
         _answer_cb(query_id, "❌ Réservé au créateur du setup et aux admins")
         return
 
-    chat_id    = setup.get('chat_id')
-    message_id = setup.get('message_id')
+    chat_id    = setup['chat_id']
+    message_id = setup['message_id']
 
     # ── Stubs (Prompt 2) ──────────────────────────────────────────────────────
     if action in ('be_pass', 'sl_hit', 'close'):
@@ -200,34 +271,26 @@ def handle_callback(cb: dict):
 
     # ── PEH ───────────────────────────────────────────────────────────────────
     if action == 'peh_in':
-        setup['peh_hit']     = True
-        state[str(setup_id)] = setup
-        _save_state(state)
+        setup['peh_hit'] = True
         _edit_keyboard(chat_id, message_id, _build_keyboard(setup_id, setup))
         _send(chat_id, f"✅ #SETUP_{setup_id} | PEH IN ✅", thread_id=PUBLISH_TOPIC_ID)
         _answer_cb(query_id)
 
     elif action == 'peh_cancel':
-        setup['peh_hit']     = False
-        state[str(setup_id)] = setup
-        _save_state(state)
+        setup['peh_hit'] = False
         _edit_keyboard(chat_id, message_id, _build_keyboard(setup_id, setup))
         _send(chat_id, f"⚠️ #SETUP_{setup_id} | CORRECTION : PEH IN annulé", thread_id=PUBLISH_TOPIC_ID)
         _answer_cb(query_id)
 
     # ── PEB ───────────────────────────────────────────────────────────────────
     elif action == 'peb_in':
-        setup['peb_hit']     = True
-        state[str(setup_id)] = setup
-        _save_state(state)
+        setup['peb_hit'] = True
         _edit_keyboard(chat_id, message_id, _build_keyboard(setup_id, setup))
         _send(chat_id, f"✅ #SETUP_{setup_id} | PEB IN ✅", thread_id=PUBLISH_TOPIC_ID)
         _answer_cb(query_id)
 
     elif action == 'peb_cancel':
-        setup['peb_hit']     = False
-        state[str(setup_id)] = setup
-        _save_state(state)
+        setup['peb_hit'] = False
         _edit_keyboard(chat_id, message_id, _build_keyboard(setup_id, setup))
         _send(chat_id, f"⚠️ #SETUP_{setup_id} | CORRECTION : PEB IN annulé", thread_id=PUBLISH_TOPIC_ID)
         _answer_cb(query_id)
@@ -242,15 +305,13 @@ def handle_callback(cb: dict):
 
         is_hit               = (action == 'tp_hit')
         setup['tp_hit'][idx] = is_hit
-        state[str(setup_id)] = setup
-        _save_state(state)
         _edit_keyboard(chat_id, message_id, _build_keyboard(setup_id, setup))
 
         if is_hit:
-            entry  = setup.get('entry_price')
-            sl     = setup.get('sl_value')
-            tp_val = setup['tps'][idx] if idx < len(setup['tps']) else None
-            r_str  = _calc_r(tp_val, entry, sl, setup['direction']) if (entry and sl and tp_val) else ''
+            ep    = setup.get('entry_price')
+            sl    = setup.get('sl_value')
+            tp_v  = setup['tps'][idx] if idx < len(setup['tps']) else None
+            r_str = _calc_r(tp_v, ep, sl, setup['direction']) if (ep and sl and tp_v) else ''
             _send(chat_id, f"✅ #SETUP_{setup_id} | TP{n}{r_str} ✅", thread_id=PUBLISH_TOPIC_ID)
         else:
             _send(chat_id, f"⚠️ #SETUP_{setup_id} | CORRECTION : TP{n} annulé", thread_id=PUBLISH_TOPIC_ID)

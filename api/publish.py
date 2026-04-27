@@ -199,6 +199,11 @@ def format_message(d, setup_num):
         lines.append("")
         lines.append(f"📝 {d['comment']}")
 
+    # creator_id encodé en spoiler pour permettre le check de permissions sans fichier de state
+    uid = d.get('user_id')
+    if uid:
+        lines.append(f"\n<tg-spoiler>cid:{uid}</tg-spoiler>")
+
     return "\n".join(lines)
 
 
