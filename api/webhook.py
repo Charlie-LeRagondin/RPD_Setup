@@ -23,12 +23,14 @@ TG = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 # ── Helpers Telegram ──────────────────────────────────────────────────────────
 
-def _send(chat_id, text, parse_mode='HTML', reply_markup=None, thread_id=None):
+def _send(chat_id, text, parse_mode='HTML', reply_markup=None, thread_id=None, reply_to=None):
     payload = {'chat_id': chat_id, 'text': text, 'parse_mode': parse_mode}
     if reply_markup:
         payload['reply_markup'] = reply_markup
     if thread_id:
         payload['message_thread_id'] = thread_id
+    if reply_to:
+        payload['reply_to_message_id'] = reply_to
     r = req.post(f"{TG}/sendMessage", json=payload, timeout=5)
     return r.json().get('result', {})
 
@@ -150,9 +152,7 @@ def _parse_message(msg: dict) -> dict:
     m        = re.search(r'#SETUP_(\d+)', text)
     setup_id = m.group(1) if m else None
 
-    # creator_id (encodé en spoiler <tg-spoiler>cid:{id}</tg-spoiler>)
-    m          = re.search(r'cid:(\d+)', text)
-    creator_id = int(m.group(1)) if m else None
+    creator_id = None  # permission check relies on admin status only
 
     # direction
     direction = 'LONG' if '(LONG)' in text else 'SHORT'
@@ -273,26 +273,30 @@ def handle_callback(cb: dict):
     if action == 'peh_in':
         setup['peh_hit'] = True
         _edit_keyboard(chat_id, message_id, _build_keyboard(setup_id, setup))
-        _send(chat_id, f"✅ #SETUP_{setup_id} | PEH IN ✅", thread_id=PUBLISH_TOPIC_ID)
+        _send(chat_id, f"✅ #SETUP_{setup_id} | PEH IN ✅",
+              thread_id=PUBLISH_TOPIC_ID, reply_to=message_id)
         _answer_cb(query_id)
 
     elif action == 'peh_cancel':
         setup['peh_hit'] = False
         _edit_keyboard(chat_id, message_id, _build_keyboard(setup_id, setup))
-        _send(chat_id, f"⚠️ #SETUP_{setup_id} | CORRECTION : PEH IN annulé", thread_id=PUBLISH_TOPIC_ID)
+        _send(chat_id, f"⚠️ #SETUP_{setup_id} | CORRECTION : PEH IN annulé",
+              thread_id=PUBLISH_TOPIC_ID, reply_to=message_id)
         _answer_cb(query_id)
 
     # ── PEB ───────────────────────────────────────────────────────────────────
     elif action == 'peb_in':
         setup['peb_hit'] = True
         _edit_keyboard(chat_id, message_id, _build_keyboard(setup_id, setup))
-        _send(chat_id, f"✅ #SETUP_{setup_id} | PEB IN ✅", thread_id=PUBLISH_TOPIC_ID)
+        _send(chat_id, f"✅ #SETUP_{setup_id} | PEB IN ✅",
+              thread_id=PUBLISH_TOPIC_ID, reply_to=message_id)
         _answer_cb(query_id)
 
     elif action == 'peb_cancel':
         setup['peb_hit'] = False
         _edit_keyboard(chat_id, message_id, _build_keyboard(setup_id, setup))
-        _send(chat_id, f"⚠️ #SETUP_{setup_id} | CORRECTION : PEB IN annulé", thread_id=PUBLISH_TOPIC_ID)
+        _send(chat_id, f"⚠️ #SETUP_{setup_id} | CORRECTION : PEB IN annulé",
+              thread_id=PUBLISH_TOPIC_ID, reply_to=message_id)
         _answer_cb(query_id)
 
     # ── TP ────────────────────────────────────────────────────────────────────
@@ -312,9 +316,11 @@ def handle_callback(cb: dict):
             sl    = setup.get('sl_value')
             tp_v  = setup['tps'][idx] if idx < len(setup['tps']) else None
             r_str = _calc_r(tp_v, ep, sl, setup['direction']) if (ep and sl and tp_v) else ''
-            _send(chat_id, f"✅ #SETUP_{setup_id} | TP{n}{r_str} ✅", thread_id=PUBLISH_TOPIC_ID)
+            _send(chat_id, f"✅ #SETUP_{setup_id} | TP{n}{r_str} ✅",
+                  thread_id=PUBLISH_TOPIC_ID, reply_to=message_id)
         else:
-            _send(chat_id, f"⚠️ #SETUP_{setup_id} | CORRECTION : TP{n} annulé", thread_id=PUBLISH_TOPIC_ID)
+            _send(chat_id, f"⚠️ #SETUP_{setup_id} | CORRECTION : TP{n} annulé",
+                  thread_id=PUBLISH_TOPIC_ID, reply_to=message_id)
 
         _answer_cb(query_id)
 

@@ -6,7 +6,6 @@ Hébergé sur Vercel (fonction serverless).
 from http.server import BaseHTTPRequestHandler
 import json
 import os
-import re
 import base64
 from datetime import datetime
 import requests as req
@@ -20,59 +19,13 @@ except Exception:
 BOT_TOKEN        = os.environ.get('BOT_TOKEN')
 GROUP_ID         = os.environ.get('GROUP_ID')
 PUBLISH_TOPIC_ID = int(os.environ.get('PUBLISH_TOPIC_ID', 0)) or None
-COUNTER_FILE     = '/tmp/counter.txt'
-STATE_FILE       = '/tmp/setups_state.json'
 
-# ── State ─────────────────────────────────────────────────────────────────────
+# ── Identifiant timestamp ─────────────────────────────────────────────────────
 
-def _load_state():
-    try:
-        with open(STATE_FILE) as f:
-            return json.load(f)
-    except Exception:
-        return {}
-
-def _save_state(state):
-    try:
-        with open(STATE_FILE, 'w') as f:
-            json.dump(state, f)
-    except Exception:
-        pass
-
-# ── Compteur setup ────────────────────────────────────────────────────────────
-
-def _last_from_telegram():
-    try:
-        r = req.get(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates",
-            params={'allowed_updates': '["channel_post"]', 'limit': 100, 'offset': -100},
-            timeout=5,
-        )
-        pattern = re.compile(r'#SETUP_(\d+)')
-        for upd in reversed(r.json().get('result', [])):
-            post = upd.get('channel_post') or {}
-            text = post.get('text', '') or post.get('caption', '')
-            m = pattern.search(text)
-            if m:
-                return int(m.group(1))
-    except Exception:
-        pass
-    return None
-
-def get_next_number():
-    last = None
-    try:
-        with open(COUNTER_FILE) as f:
-            last = int(f.read().strip())
-    except Exception:
-        last = _last_from_telegram()
-    next_n = (last or 0) + 1
-    try:
-        with open(COUNTER_FILE, 'w') as f:
-            f.write(str(next_n))
-    except Exception:
-        pass
-    return next_n
+def get_setup_id() -> str:
+    """Retourne un ID au format DDMMHHMM (ex: 27041025 pour le 27/04 à 10:25)."""
+    now = datetime.now(_PARIS) if _PARIS else datetime.utcnow()
+    return now.strftime('%d%m%H%M')
 
 # ── Calcul du R ───────────────────────────────────────────────────────────────
 
@@ -103,9 +56,9 @@ def _calc_r(tp_val, entry, sl, direction):
 
 # ── Keyboard ──────────────────────────────────────────────────────────────────
 
-def _build_keyboard(setup_id, setup):
+def _build_keyboard(setup_id: str, setup: dict) -> dict:
     rows = []
-    sid  = str(setup_id)
+    sid  = setup_id
 
     entry_type = setup['entry_type']
     if entry_type == 'PEH':
@@ -125,7 +78,6 @@ def _build_keyboard(setup_id, setup):
                 'callback_data': f'peb_cancel:{sid}' if setup['peb_hit'] else f'peb_in:{sid}',
             },
         ])
-    # MARKET : pas de ligne entrée
 
     tps    = setup['tps']
     tp_hit = setup['tp_hit']
@@ -153,7 +105,7 @@ def _build_keyboard(setup_id, setup):
 
 # ── Formateur de message ──────────────────────────────────────────────────────
 
-def format_message(d, setup_num):
+def format_message(d: dict, setup_id: str) -> str:
     style_labels = {'SCALP': 'SCALP 🚀', 'INTRA': 'INTRA ⚡', 'SWING': 'SWING 🌊'}
     dir_badge    = '🟢' if d['direction'] == 'LONG' else '🔴'
 
@@ -165,7 +117,7 @@ def format_message(d, setup_num):
         username = f'@{username}'
 
     lines = [
-        f"🛠 #SETUP_{setup_num} | {style_labels.get(d['style'], d['style'])}",
+        f"🛠 #SETUP_{setup_id} | {style_labels.get(d['style'], d['style'])}",
         f"🧑‍💼 {username} | 📅 {date_str}",
         f"{dir_badge} ${d['actif']} {dir_badge} ({d['direction']})",
         "",
@@ -199,11 +151,6 @@ def format_message(d, setup_num):
         lines.append("")
         lines.append(f"📝 {d['comment']}")
 
-    # creator_id encodé en spoiler pour permettre le check de permissions sans fichier de state
-    uid = d.get('user_id')
-    if uid:
-        lines.append(f"\n<tg-spoiler>cid:{uid}</tg-spoiler>")
-
     return "\n".join(lines)
 
 
@@ -223,13 +170,12 @@ class handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         try:
-            length    = int(self.headers.get('Content-Length', 0))
-            data      = json.loads(self.rfile.read(length))
-            setup_num = get_next_number()
-            caption   = format_message(data, setup_num)
-            tg        = f"https://api.telegram.org/bot{BOT_TOKEN}"
+            length   = int(self.headers.get('Content-Length', 0))
+            data     = json.loads(self.rfile.read(length))
+            setup_id = get_setup_id()
+            caption  = format_message(data, setup_id)
+            tg       = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-            # Determine entry type
             entry_type = 'MARKET'
             if not data.get('entree_market'):
                 if data.get('peh') and data.get('peb'):
@@ -262,7 +208,7 @@ class handler(BaseHTTPRequestHandler):
                 'created_at':         (datetime.now(_PARIS) if _PARIS else datetime.utcnow()).isoformat(),
             }
 
-            keyboard = _build_keyboard(setup_num, setup_entry)
+            keyboard = _build_keyboard(setup_id, setup_entry)
 
             if data.get('photo_b64'):
                 photo_bytes = base64.b64decode(data['photo_b64'])
@@ -291,13 +237,6 @@ class handler(BaseHTTPRequestHandler):
                 r = req.post(f"{tg}/sendMessage", json=payload, timeout=15)
 
             result = r.json()
-            msg_id = (result.get('result') or {}).get('message_id')
-            setup_entry['message_id'] = msg_id
-
-            state = _load_state()
-            state[str(setup_num)] = setup_entry
-            _save_state(state)
-
             status = 200 if result.get('ok') else 502
             self.send_response(status)
             self.send_header('Content-type', 'application/json')
